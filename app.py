@@ -109,4 +109,94 @@ class FruitModule:
                     c_name = "N/A"
                     if mode == "Credit":
                         c_df = self.db.fetch("customers")
-                        c_name =
+                        c_name = st.selectbox("Select Customer", c_df['name'].tolist() if not c_df.empty else [])
+                    if st.form_submit_button("Complete Sale"):
+                        if 0 < q <= stock:
+                            self.db.push("sales", {"item":sel, "qty":q, "price":p, "type":mode, "customer":c_name, "date":self.today, "month":self.month})
+                        else: st.error("Check Stock Quantity")
+
+# ==========================================
+# 4. GAS MODULE
+# ==========================================
+class GasModule:
+    def __init__(self, db, today, role):
+        self.db, self.today, self.role = db, today, role
+
+    def render(self):
+        st.title("🔥 Gas Agency")
+        t_list = ["⚡ Sales & Swaps"]
+        if self.role == "Admin": t_list += ["🚛 Supplier Ledger"]
+        tabs = st.tabs(t_list)
+
+        with tabs[0]:
+            with st.form("g_sale"):
+                c_df = self.db.fetch("customers")
+                c_name = st.selectbox("Customer", c_df['name'].tolist() if not c_df.empty else ["Register Customer First"])
+                sz = st.selectbox("Cylinder", ["11.8kg", "45kg", "6kg"])
+                pr = st.number_input("Price", min_value=0)
+                mode = st.radio("Payment", ["Cash", "Credit"], horizontal=True)
+                swp = st.checkbox("Empty Received?")
+                if st.form_submit_button("Record Gas Transaction"):
+                    self.db.push("gas_sales", {"customer_name":c_name, "cylinder_type":sz, "price_pkr":pr, "payment_mode":mode, "empty_received":swp, "date":self.today})
+
+        if self.role == "Admin":
+            with tabs[1]:
+                with st.form("sup_l"):
+                    s_name = st.text_input("Company Name")
+                    ret = st.number_input("Empties Returned", min_value=0)
+                    pay = st.number_input("Cash Paid to Company", min_value=0)
+                    if st.form_submit_button("Update Supplier Account"):
+                        self.db.push("gas_supplier_ledger", {"supplier_name":s_name, "bottles_returned":ret, "payment_made":pay, "date":self.today})
+
+# ==========================================
+# 5. MAIN ROUTER
+# ==========================================
+def main():
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if 'biz' not in st.session_state: st.session_state.biz = None
+
+    db = ShopDB()
+    # FIXED LINE:
+    today = datetime.now().strftime("%Y-%m-%d")
+    month = datetime.now().strftime("%Y-%m")
+
+    if not st.session_state.logged_in:
+        st.title("🔐 Shop Login")
+        pwd = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if pwd == "owner786": 
+                st.session_state.logged_in, st.session_state.role = True, "Admin"
+                st.rerun()
+            elif pwd == "staff123": 
+                st.session_state.logged_in, st.session_state.role = True, "Operator"
+                st.rerun()
+            else: st.error("Wrong Password")
+        return
+
+    if st.session_state.biz is None:
+        st.title(f"👋 {st.session_state.role} Hub")
+        c1, c2 = st.columns(2)
+        if c1.button("🍎 Fruit Business", use_container_width=True): st.session_state.biz = "Fruit"; st.rerun()
+        if c2.button("🔥 Gas Business", use_container_width=True): st.session_state.biz = "Gas"; st.rerun()
+        if st.button("🚪 Logout"): st.session_state.logged_in = False; st.rerun()
+        return
+
+    st.sidebar.title(f"📍 {st.session_state.biz}")
+    nav = ["Ops"]
+    if st.session_state.role == "Admin": nav.append("Customers")
+    nav.append("Switch Business")
+    choice = st.sidebar.radio("Navigation", nav)
+
+    if choice == "Switch Business":
+        st.session_state.biz = None
+        st.rerun()
+    elif choice == "Customers":
+        CustomerModule(db, st.session_state.role).render()
+    else:
+        if st.session_state.biz == "Fruit":
+            FruitModule(db, today, month, st.session_state.role).render()
+        elif st.session_state.biz == "Gas":
+            GasModule(db, today, st.session_state.role).render()
+
+if __name__ == "__main__":
+    main()
