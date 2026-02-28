@@ -85,15 +85,36 @@ choice = st.selectbox("Action Menu", menu)
 
 if choice == "Sales":
     st.subheader("🛒 Quick Sale")
+    
+    # FETCH ALL DATA FOR STOCK CALCULATION
     p_df = get_cloud_data("purchases")
+    s_df = get_cloud_data("sales")
+    w_df = get_cloud_data("waste")
+    
     available_items = ["Select Item"]
     if not p_df.empty:
         available_items += sorted(p_df['item'].unique().tolist())
     
     with st.form("sale_form", clear_on_submit=True):
         item = st.selectbox("Select Fruit/Veg", available_items)
-        qty = st.number_input("Quantity", min_value=0.0, step=0.5)
-        pr = st.number_input("Selling Price", min_value=0.0, step=1.0)
+        
+        # --- LIVE STOCK DISPLAY LOGIC ---
+        current_stock = 0.0
+        if item != "Select Item":
+            purchased = p_df[p_df['item'] == item]['qty'].sum() if not p_df.empty else 0
+            sold = s_df[s_df['item'] == item]['qty'].sum() if not s_df.empty else 0
+            wasted = w_df[w_df['item'] == item]['qty'].sum() if not w_df.empty else 0
+            current_stock = purchased - sold - wasted
+            
+            if current_stock <= 0:
+                st.error(f"⚠️ OUT OF STOCK! ({current_stock} kg left)")
+            elif current_stock < 5:
+                st.warning(f"Low Stock: {current_stock} kg left")
+            else:
+                st.success(f"Available Stock: {current_stock} kg")
+
+        qty = st.number_input("Quantity to Sell", min_value=0.0, step=0.5)
+        pr = st.number_input("Selling Price (Per Unit)", min_value=0.0, step=1.0)
         mode = st.radio("Payment Mode", ["Cash", "Credit"])
         
         cust = "N/A"
@@ -103,7 +124,11 @@ if choice == "Sales":
             cust = st.selectbox("Select Customer", c_list)
         
         if st.form_submit_button("Log Sale"):
-            if item != "Select Item":
+            if item == "Select Item":
+                st.error("Please select an item!")
+            elif qty > current_stock:
+                st.error("Cannot sell more than available stock!")
+            else:
                 save_entry("sales", {"item":item,"qty":qty,"price":pr,"type":mode,"customer":cust,"date":today,"month":this_month})
 
 elif choice == "Stock In":
@@ -116,38 +141,29 @@ elif choice == "Stock In":
             save_entry("purchases", {"item":p_item,"qty":p_qty,"price":p_cost,"date":today,"month":this_month})
 
 elif choice == "Supplier Billing":
-    st.subheader("🚛 Supplier Ledger (Accounts Payable)")
+    st.subheader("🚛 Supplier Ledger")
     t1, t2 = st.tabs(["Manage Suppliers", "Payments & Bills"])
-    
     with t1:
-        new_s = st.text_input("New Supplier Name (e.g. Green Farms)")
+        new_s = st.text_input("New Supplier Name")
         if st.button("Add Supplier"):
             save_entry("suppliers", {"name": new_s})
-        st.write("Current Suppliers:")
-        st.dataframe(get_cloud_data("suppliers"))
-
     with t2:
         s_df = get_cloud_data("suppliers")
         if not s_df.empty:
             with st.form("sup_pay", clear_on_submit=True):
                 s_name = st.selectbox("Select Supplier", s_df['name'].tolist())
-                bill = st.number_input("New Bill Amount", min_value=0.0)
-                paid = st.number_input("Cash Paid Now", min_value=0.0)
-                if st.form_submit_button("Save Transaction"):
+                bill = st.number_input("Bill Amount", min_value=0.0)
+                paid = st.number_input("Cash Paid", min_value=0.0)
+                if st.form_submit_button("Save"):
                     save_entry("supplier_payments", {"supplier_name":s_name, "bill_amount":bill, "paid_amount":paid, "date":today, "month":this_month})
-            
-            st.divider()
-            st.write("📊 **Current Balances Owed to Suppliers**")
-            sp_df = get_cloud_data("supplier_payments")
-            if not sp_df.empty:
-                ledger = sp_df.groupby('supplier_name').agg({'bill_amount':'sum', 'paid_amount':'sum'}).reset_index()
-                ledger['Balance Due'] = ledger['bill_amount'] - ledger['paid_amount']
-                st.table(ledger)
 
 elif choice == "Waste Log":
     st.subheader("🗑️ Record Spoilage")
     with st.form("w_form", clear_on_submit=True):
-        w_item = st.text_input("Item")
+        p_df = get_cloud_data("purchases")
+        w_items = ["Select Item"]
+        if not p_df.empty: w_items += sorted(p_df['item'].unique().tolist())
+        w_item = st.selectbox("Item", w_items)
         w_qty = st.number_input("Qty", min_value=0.0)
         w_cost = st.number_input("Cost Price", min_value=0.0)
         if st.form_submit_button("Log Waste"):
