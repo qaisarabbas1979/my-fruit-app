@@ -14,7 +14,7 @@ class ShopDB:
                 st.secrets["SUPABASE_KEY"]
             )
         except:
-            st.error("⚠️ Connection Error: Check Streamlit Secrets.")
+            st.error("⚠️ Setup Missing: Add SUPABASE_URL and KEY to Streamlit Secrets!")
             st.stop()
 
     def fetch(self, table):
@@ -27,14 +27,14 @@ class ShopDB:
     def push(self, table, data):
         try:
             self.client.table(table).insert(data).execute()
-            st.success("✅ Recorded!")
+            st.success("✅ Recorded Successfully!")
             return True
         except Exception as e:
-            st.error(f"❌ Error: {e}")
+            st.error(f"❌ Database Error: {e}")
             return False
 
 # ==========================================
-# MODULE 2: BUSINESS LOGIC CLASSES
+# MODULE 2: FRUIT BUSINESS
 # ==========================================
 class FruitModule:
     def __init__(self, db, today, month):
@@ -43,132 +43,137 @@ class FruitModule:
         self.month = month
 
     def render(self):
-        st.subheader("🍎 Fruit & Vegetable Management")
-        sub_menu = st.tabs(["Sales", "Inventory", "Waste Log"])
-        
-        # --- Sales Tab ---
-        with sub_menu[0]:
+        st.title("🍎 Fruit & Vegetable Shop")
+        tab1, tab2, tab3 = st.tabs(["🛒 Sales", "📦 Inventory", "🗑️ Waste Log"])
+
+        with tab1:
             p_df = self.db.fetch("purchases")
             items = sorted(p_df['item'].unique().tolist()) if not p_df.empty else []
             selected = st.selectbox("Select Item", ["Select..."] + items)
+            
             if selected != "Select...":
-                st.info(f"Checking Stock for {selected}...")
-                # Sales Logic here...
+                # Stock Calculation
+                s_df = self.db.fetch("sales")
+                w_df = self.db.fetch("waste")
+                in_q = p_df[p_df['item'] == selected]['qty'].sum()
+                out_q = s_df[s_df['item'] == selected]['qty'].sum() if not s_df.empty else 0
+                lost_q = w_df[w_df['item'] == selected]['qty'].sum() if not w_df.empty else 0
+                stock = float(in_q) - float(out_q) - float(lost_q)
+                
+                st.info(f"Available Stock: **{stock} kg**")
+                
+                with st.form("fruit_sale"):
+                    q = st.number_input("Qty (kg)", min_value=0.0)
+                    p = st.number_input("Price (PKR)", min_value=0.0)
+                    if st.form_submit_button("Complete Sale"):
+                        if 0 < q <= stock:
+                            self.db.push("sales", {"item":selected, "qty":q, "price":p, "date":self.today, "month":self.month})
+                        else: st.error("Invalid Quantity")
 
-        # --- Inventory Tab ---
-        with sub_menu[1]:
+        with tab2:
             with st.form("fruit_stock"):
+                st.write("Add New Stock")
                 i = st.text_input("Item Name")
                 q = st.number_input("Qty Received", min_value=0.0)
                 p = st.number_input("Purchase Price", min_value=0.0)
                 if st.form_submit_button("Add Stock"):
-                    self.db.push("purchases", {"item":i,"qty":q,"price":p,"date":self.today,"month":self.month})
+                    self.db.push("purchases", {"item":i, "qty":q, "price":p, "date":self.today, "month":self.month})
 
+# ==========================================
+# MODULE 3: GAS BUSINESS
+# ==========================================
 class GasModule:
     def __init__(self, db, today):
         self.db = db
         self.today = today
 
     def render(self):
-        st.subheader("🔥 Gas Agency Operations")
-        sub_menu = st.tabs(["Cylinder Sales", "Supplier Ledger"])
+        st.title("🔥 Gas Agency")
+        tab1, tab2 = st.tabs(["⚡ Cylinder Sales", "🚛 Supplier Bills"])
         
-        with sub_menu[0]:
+        with tab1:
             with st.form("gas_sale"):
-                c_name = st.text_input("Customer Name")
+                cust = st.text_input("Customer Name")
                 size = st.selectbox("Size", ["11.8kg", "45kg", "6kg"])
+                pr = st.number_input("Price (PKR)", min_value=0)
                 if st.form_submit_button("Log Sale"):
-                    # Gas Logic here...
-                    pass
+                    self.db.push("gas_sales", {"customer_name":cust, "cylinder_type":size, "price_pkr":pr, "date":self.today})
 
+# ==========================================
+# MODULE 4: CUSTOMER DIRECTORY
+# ==========================================
 class CustomerModule:
     def __init__(self, db):
         self.db = db
 
     def render(self):
-        st.subheader("👥 Customer Directory")
-        name = st.text_input("Customer Name")
-        phone = st.text_input("Phone")
-        if st.button("Register New Customer"):
-            self.db.push("customers", {"name": name, "phone": phone})
+        st.title("👥 Customer Management")
+        with st.form("cust_reg"):
+            name = st.text_input("Full Name")
+            phone = st.text_input("Phone Number")
+            if st.form_submit_button("Register Customer"):
+                self.db.push("customers", {"name":name, "phone":phone})
         
         st.divider()
-        st.write("Current Registered Customers:")
-        st.dataframe(self.db.fetch("customers"))
+        df = self.db.fetch("customers")
+        if not df.empty:
+            st.dataframe(df)
 
 # ==========================================
-# MAIN ROUTER & SESSION MANAGEMENT
+# MAIN APP ROUTER
 # ==========================================
 def main():
-    st.set_page_config(page_title="Shop ERP", layout="centered")
-    
-    # Initialize Session States
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    if 'business_choice' not in st.session_state:
-        st.session_state.business_choice = None
+    # Session State Init
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if 'biz' not in st.session_state: st.session_state.biz = None
 
     db = ShopDB()
     today = datetime.now().strftime("%Y-%m-%d")
     month = datetime.now().strftime("%Y-%m")
 
-    # --- SCREEN 1: LOGIN ---
+    # SCREEN 1: LOGIN
     if not st.session_state.logged_in:
-        st.title("🔐 Shop Login")
-        pwd = st.text_input("Enter Shop Password", type="password")
-        if st.button("Login"):
+        st.markdown("## 🔐 Islamabad Shop Login")
+        pwd = st.text_input("Enter Password", type="password")
+        if st.button("Enter Shop"):
             if pwd == "owner786" or pwd == "staff123":
                 st.session_state.logged_in = True
-                st.session_state.role = "Admin" if pwd == "owner786" else "Staff"
                 st.rerun()
-            else:
-                st.error("Invalid Password")
+            else: st.error("Incorrect Password")
         return
 
-    # --- SCREEN 2: BUSINESS SELECTION (HUB) ---
-    if st.session_state.business_choice is None:
-        st.title(f"👋 Welcome, {st.session_state.role}")
-        st.write("Choose the business you want to operate today:")
-        
-        col1, col2 = st.columns(2)
-        if col1.button("🍎 Enter Fruit Business", use_container_width=True):
-            st.session_state.business_choice = "Fruit"
+    # SCREEN 2: THE HUB
+    if st.session_state.biz is None:
+        st.markdown(f"### 👋 Welcome! Select a Business to Manage:")
+        c1, c2 = st.columns(2)
+        if c1.button("🍎 Fruit Business", use_container_width=True):
+            st.session_state.biz = "Fruit"
             st.rerun()
-        if col2.button("🔥 Enter Gas Business", use_container_width=True):
-            st.session_state.business_choice = "Gas"
+        if c2.button("🔥 Gas Business", use_container_width=True):
+            st.session_state.biz = "Gas"
             st.rerun()
         
-        st.divider()
         if st.button("🚪 Logout"):
             st.session_state.logged_in = False
             st.rerun()
         return
 
-    # --- SCREEN 3: OPERATIONAL DASHBOARD ---
-    st.sidebar.title(f"📍 {st.session_state.business_choice} Mode")
+    # SCREEN 3: OPERATION
+    st.sidebar.title(f"📍 {st.session_state.biz} Mode")
+    nav = st.sidebar.radio("Navigate", ["Store Operations", "Customers", "Switch Business"])
+
+    if nav == "Switch Business":
+        st.session_state.biz = None
+        st.rerun()
     
-    # Context-Aware Sidebar Navigation
-    if st.session_state.business_choice == "Fruit":
-        nav = st.sidebar.radio("Navigation", ["Sales & Stock", "Customers", "Reports"])
-        if st.sidebar.button("🔄 Switch Business"):
-            st.session_state.business_choice = None
-            st.rerun()
-            
-        if nav == "Sales & Stock":
+    elif nav == "Customers":
+        CustomerModule(db).render()
+    
+    elif nav == "Store Operations":
+        if st.session_state.biz == "Fruit":
             FruitModule(db, today, month).render()
-        elif nav == "Customers":
-            CustomerModule(db).render()
-            
-    elif st.session_state.business_choice == "Gas":
-        nav = st.sidebar.radio("Navigation", ["Cylinder Ops", "Customers", "Reports"])
-        if st.sidebar.button("🔄 Switch Business"):
-            st.session_state.business_choice = None
-            st.rerun()
-            
-        if nav == "Cylinder Ops":
+        else:
             GasModule(db, today).render()
-        elif nav == "Customers":
-            CustomerModule(db).render()
 
 if __name__ == "__main__":
     main()
