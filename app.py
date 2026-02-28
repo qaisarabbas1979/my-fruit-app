@@ -33,11 +33,10 @@ if not ((role == "Admin" and pwd == ADMIN_PW) or (role == "Operator" and pwd == 
     st.info("Enter password in the sidebar to start.")
     st.stop()
 
-# --- 4. TIME HELPERS ---
 today = datetime.now().strftime("%Y-%m-%d")
 this_month = datetime.now().strftime("%Y-%m")
 
-# --- 5. CORE FUNCTIONS ---
+# --- 4. CORE FUNCTIONS ---
 def save_entry(table, data):
     data_str = json.dumps(data)
     local_c.execute("INSERT INTO sync_queue (table_name, data_json, timestamp) VALUES (?,?,?)", 
@@ -47,9 +46,9 @@ def save_entry(table, data):
         supabase.table(table).insert(data).execute()
         local_c.execute("DELETE FROM sync_queue WHERE table_name = ? AND data_json = ?", (table, data_str))
         local_conn.commit()
-        st.success("✅ Recorded & Synced!")
+        st.success("✅ Saved & Synced!")
     except:
-        st.warning("⚠️ Offline: Saved locally.")
+        st.warning("⚠️ Saved Locally (Offline).")
 
 def get_cloud_data(table):
     try:
@@ -58,10 +57,10 @@ def get_cloud_data(table):
     except:
         return pd.DataFrame()
 
-# --- 6. OFFLINE SYNC ---
+# --- 5. SYNC MANAGER ---
 pending = local_c.execute("SELECT COUNT(*) FROM sync_queue").fetchone()[0]
 if pending > 0:
-    st.sidebar.warning(f"📡 {pending} Items Waiting to Sync")
+    st.sidebar.warning(f"📡 {pending} Items to Sync")
     if st.sidebar.button("🔄 Sync Now"):
         rows = local_c.execute("SELECT id, table_name, data_json FROM sync_queue").fetchall()
         for rid, t_name, d_json in rows:
@@ -73,23 +72,19 @@ if pending > 0:
             except: break
         st.rerun()
 
-# --- 7. MAIN DASHBOARD ---
+# --- 6. NAVIGATION ---
 st.title(f"🍎 {role} Dashboard")
 
-# UPDATED: Operator can no longer see 'Stock In' or 'Expenses'
 if role == "Admin":
-    menu = ["Sales", "Stock In", "Waste Log", "Expenses", "Customer Ledger", "Profit Reports"]
+    menu = ["Sales", "Stock In", "Waste Log", "Expenses", "Customer Ledger", "Supplier Billing", "Profit Reports"]
 else:
     menu = ["Sales", "Waste Log"]
-    
 choice = st.selectbox("Action Menu", menu)
 
-# --- 8. FEATURES ---
+# --- 7. FEATURES ---
 
 if choice == "Sales":
     st.subheader("🛒 Quick Sale")
-    
-    # FETCH ITEMS FROM PURCHASE HISTORY FOR DROPDOWN
     p_df = get_cloud_data("purchases")
     available_items = ["Select Item"]
     if not p_df.empty:
@@ -101,64 +96,66 @@ if choice == "Sales":
         pr = st.number_input("Selling Price", min_value=0.0, step=1.0)
         mode = st.radio("Payment Mode", ["Cash", "Credit"])
         
-        # Smart Customer Logic
         cust = "N/A"
         if mode == "Credit":
             c_df = get_cloud_data("customers")
-            c_list = c_df['name'].tolist() if not c_df.empty else ["No Customers Found"]
-            cust = st.selectbox("Select Credit Customer", c_list)
+            c_list = c_df['name'].tolist() if not c_df.empty else ["No Customers"]
+            cust = st.selectbox("Select Customer", c_list)
         
         if st.form_submit_button("Log Sale"):
-            if item == "Select Item":
-                st.error("Please select an item first!")
-            else:
+            if item != "Select Item":
                 save_entry("sales", {"item":item,"qty":qty,"price":pr,"type":mode,"customer":cust,"date":today,"month":this_month})
 
 elif choice == "Stock In":
-    st.subheader("🚚 Wholesale Purchases (Admin Only)")
+    st.subheader("🚚 Wholesale Purchases")
     with st.form("p_form", clear_on_submit=True):
-        p_item = st.text_input("New Item Name (e.g. Apple)")
+        p_item = st.text_input("Item Name (e.g. Mango)")
         p_qty = st.number_input("Qty Purchased", min_value=0.0)
-        p_cost = st.number_input("Cost per Unit/kg", min_value=0.0)
-        if st.form_submit_button("Add to Stock List"):
+        p_cost = st.number_input("Purchase Price (Per Unit)", min_value=0.0)
+        if st.form_submit_button("Add to Stock"):
             save_entry("purchases", {"item":p_item,"qty":p_qty,"price":p_cost,"date":today,"month":this_month})
+
+elif choice == "Supplier Billing":
+    st.subheader("🚛 Supplier Ledger (Accounts Payable)")
+    t1, t2 = st.tabs(["Manage Suppliers", "Payments & Bills"])
+    
+    with t1:
+        new_s = st.text_input("New Supplier Name (e.g. Green Farms)")
+        if st.button("Add Supplier"):
+            save_entry("suppliers", {"name": new_s})
+        st.write("Current Suppliers:")
+        st.dataframe(get_cloud_data("suppliers"))
+
+    with t2:
+        s_df = get_cloud_data("suppliers")
+        if not s_df.empty:
+            with st.form("sup_pay", clear_on_submit=True):
+                s_name = st.selectbox("Select Supplier", s_df['name'].tolist())
+                bill = st.number_input("New Bill Amount", min_value=0.0)
+                paid = st.number_input("Cash Paid Now", min_value=0.0)
+                if st.form_submit_button("Save Transaction"):
+                    save_entry("supplier_payments", {"supplier_name":s_name, "bill_amount":bill, "paid_amount":paid, "date":today, "month":this_month})
+            
+            st.divider()
+            st.write("📊 **Current Balances Owed to Suppliers**")
+            sp_df = get_cloud_data("supplier_payments")
+            if not sp_df.empty:
+                ledger = sp_df.groupby('supplier_name').agg({'bill_amount':'sum', 'paid_amount':'sum'}).reset_index()
+                ledger['Balance Due'] = ledger['bill_amount'] - ledger['paid_amount']
+                st.table(ledger)
 
 elif choice == "Waste Log":
     st.subheader("🗑️ Record Spoilage")
     with st.form("w_form", clear_on_submit=True):
-        p_df = get_cloud_data("purchases")
-        w_items = ["Select Item"]
-        if not p_df.empty: w_items += sorted(p_df['item'].unique().tolist())
-        
-        w_item = st.selectbox("Item Name", w_items)
-        w_qty = st.number_input("Qty Spoiled", min_value=0.0)
-        w_cost = st.number_input("Original Cost Price (Reference)", min_value=0.0)
-        if st.form_submit_button("Record Waste"):
+        w_item = st.text_input("Item")
+        w_qty = st.number_input("Qty", min_value=0.0)
+        w_cost = st.number_input("Cost Price", min_value=0.0)
+        if st.form_submit_button("Log Waste"):
             save_entry("waste", {"item":w_item,"qty":w_qty,"cost_price":w_cost,"date":today,"month":this_month})
 
-elif choice == "Expenses":
-    st.subheader("💸 Shop Expenses (Admin Only)")
-    with st.form("e_form", clear_on_submit=True):
-        cat = st.selectbox("Category", ["Business (Rent/Wages)", "Personal (Drawings)"])
-        amt = st.number_input("Amount", min_value=0.0)
-        note = st.text_input("Description")
-        if st.form_submit_button("Save"):
-            save_entry("expenses", {"category":cat,"amount":amt,"description":note,"date":today,"month":this_month})
-
-elif choice == "Customer Ledger":
-    t1, t2 = st.tabs(["Add Customer", "View Balances"])
-    with t1:
-        new_c = st.text_input("Full Name")
-        if st.button("Register"):
-            save_entry("customers", {"name": new_c})
-    with t2:
-        # Debt calculation logic would go here
-        st.info("Check Supabase dashboard for full balances.")
-
 elif choice == "Profit Reports":
-    st.header("📈 Financial Performance")
+    st.header("📈 Financial Report")
     s_df = get_cloud_data("sales")
     if not s_df.empty:
         s_df['rev'] = s_df['qty'].astype(float) * s_df['price'].astype(float)
         st.metric("Total Revenue", f"${s_df['rev'].sum():,.2f}")
-        st.bar_chart(s_df.groupby('item')['qty'].sum())
