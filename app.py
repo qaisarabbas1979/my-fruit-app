@@ -3,108 +3,164 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
 
-# --- 1. SETUP ---
-try:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    supabase: Client = create_client(url, key)
-except:
-    st.error("⚠️ Setup Missing: Add SUPABASE_URL and KEY to Streamlit Secrets!")
-    st.stop()
+# ==========================================
+# MODULE 1: DATABASE & CORE ENGINE
+# ==========================================
+class ShopDB:
+    def __init__(self):
+        try:
+            self.client: Client = create_client(
+                st.secrets["SUPABASE_URL"], 
+                st.secrets["SUPABASE_KEY"]
+            )
+        except:
+            st.error("⚠️ Connection Error: Check Streamlit Secrets.")
+            st.stop()
 
-# --- 2. AUTHENTICATION ---
-st.sidebar.title("🏪 Islamabad Multi-Shop")
-role = st.sidebar.radio("Select Business:", ["Fruit Store", "Gas Agency", "Admin Dashboard"])
-pwd = st.sidebar.text_input("Password", type="password")
+    def fetch(self, table):
+        try:
+            res = self.client.table(table).select("*").execute()
+            df = pd.DataFrame(res.data)
+            if not df.empty and 'item' in df.columns:
+                df['item'] = df['item'].str.strip()
+            return df
+        except:
+            return pd.DataFrame()
 
-if not ((pwd == "owner786") or (pwd == "staff123")):
-    st.info("Please login with your password to continue.")
-    st.stop()
+    def push(self, table, data):
+        try:
+            self.client.table(table).insert(data).execute()
+            st.success("✅ Recorded Successfully!")
+            return True
+        except Exception as e:
+            st.error(f"❌ Database Error: {e}")
+            return False
 
-today = datetime.now().strftime("%Y-%m-%d")
-this_month = datetime.now().strftime("%Y-%m")
+# ==========================================
+# MODULE 2: FRUIT STORE FUNCTIONALITY
+# ==========================================
+class FruitModule:
+    def __init__(self, db, today, month):
+        self.db = db
+        self.today = today
+        self.month = month
 
-# --- 3. DATA HELPERS ---
-def get_data(table):
-    try:
-        res = supabase.table(table).select("*").execute()
-        return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+    def render(self):
+        st.header("🍎 Fruit & Vegetable Sales")
+        p_df = self.db.fetch("purchases")
+        s_df = self.db.fetch("sales")
+        w_df = self.db.fetch("waste")
+        
+        if p_df.empty:
+            st.warning("No stock available. Admin must add stock first.")
+            return
 
-def save_entry(table, data):
-    try:
-        supabase.table(table).insert(data).execute()
-        st.success("✅ Recorded!")
-        return True
-    except: return False
+        items = sorted(p_df['item'].unique().tolist())
+        selected = st.selectbox("Select Item", ["Select..."] + items)
 
-# --- 4. ADMIN DASHBOARD (PROFIT & LOSS) ---
-if role == "Admin Dashboard":
-    if pwd == "owner786":
-        st.header(f"📈 Business Performance ({this_month})")
-        menu = st.selectbox("Menu", ["Profit & Loss Report", "Daily Cash", "Credit Ledger", "Inventory & Expenses"])
-
-        if menu == "Profit & Loss Report":
-            # Fetch all necessary data
-            sales = get_data("sales")
-            gas = get_data("gas_sales")
-            purchases = get_data("purchases")
-            waste = get_data("waste")
-            expenses = get_data("shop_expenses")
-
-            # 1. Revenue (Sales)
-            rev_f = (sales[sales['month'] == this_month]['qty'].astype(float) * sales[sales['month'] == this_month]['price'].astype(float)).sum() if not sales.empty else 0
-            rev_g = (gas[gas['date'].str.contains(this_month)]['qty'].astype(float) * gas[gas['date'].str.contains(this_month)]['price_pkr'].astype(float)).sum() if not gas.empty else 0
-            total_rev = rev_f + rev_g
-
-            # 2. Expenses & Waste
-            total_exp = expenses[expenses['month'] == this_month]['amount'].sum() if not expenses.empty else 0
-            total_waste = (waste[waste['month'] == this_month]['qty'].astype(float) * waste[waste['month'] == this_month]['cost_price'].astype(float)).sum() if not waste.empty else 0
+        if selected != "Select...":
+            # Stock Logic
+            in_qty = p_df[p_df['item'] == selected]['qty'].sum()
+            out_qty = s_df[s_df['item'] == selected]['qty'].sum() if not s_df.empty else 0
+            lost_qty = w_df[w_df['item'] == selected]['qty'].sum() if not w_df.empty else 0
+            stock = float(in_qty) - float(out_qty) - float(lost_qty)
             
-            # 3. Cost of Goods (Simplified)
-            # (In a real scenario, this would be based on qty sold * purchase price)
+            st.info(f"📦 Stock: **{stock} kg**")
+
+            with st.form("fruit_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                q = c1.number_input("Qty (kg)", min_value=0.0, step=0.1)
+                p = c2.number_input("Price (PKR)", min_value=0.0, step=10.0)
+                mode = st.radio("Mode", ["Cash", "Credit"], horizontal=True)
+                cust = st.text_input("Customer") if mode == "Credit" else "N/A"
+                
+                if st.form_submit_button("Sale"):
+                    if 0 < q <= stock:
+                        self.db.push("sales", {"item":selected,"qty":q,"price":p,"type":mode,"customer":cust,"date":self.today,"month":self.month})
+                    else:
+                        st.error("Invalid Quantity!")
+
+# ==========================================
+# MODULE 3: GAS AGENCY FUNCTIONALITY
+# ==========================================
+class GasModule:
+    def __init__(self, db, today):
+        self.db = db
+        self.today = today
+
+    def render(self):
+        st.header("🔥 Gas Cylinder Tracking")
+        with st.form("gas_form", clear_on_submit=True):
+            name = st.text_input("Customer")
+            size = st.selectbox("Size", ["11.8kg", "45kg", "6kg"])
+            qty = st.number_input("Qty", min_value=1)
+            pr = st.number_input("Price (PKR)", min_value=0)
+            swap = st.checkbox("Empty Bottle Received?")
             
-            st.metric("Total Monthly Revenue", f"Rs. {total_rev:,.0f}")
+            if st.form_submit_button("Record Gas Sale"):
+                self.db.push("gas_sales", {
+                    "customer_name": name, "cylinder_type": size, 
+                    "qty": qty, "price_pkr": pr, "empty_received": swap, "date": self.today
+                })
+
+# ==========================================
+# MODULE 4: ADMIN & REPORTS
+# ==========================================
+class AdminModule:
+    def __init__(self, db, today, month):
+        self.db = db
+        self.today = today
+        self.month = month
+
+    def render(self):
+        st.header("📈 Admin Dashboard")
+        choice = st.selectbox("Action", ["Reports", "Add Fruit Stock", "Waste Log", "Expenses"])
+        
+        if choice == "Reports":
+            # Simplified Profit/Loss
+            sales = self.db.fetch("sales")
+            gas = self.db.fetch("gas_sales")
+            st.subheader(f"Total Revenue: PKR {(sales['qty'].astype(float)*sales['price'].astype(float)).sum() + gas['price_pkr'].sum():,.0f}")
             
-            col1, col2 = st.columns(2)
-            col1.error(f"Waste Loss: Rs. {total_waste:,.0f}")
-            col2.error(f"Shop Expenses: Rs. {total_exp:,.0f}")
-            
-            net_profit = total_rev - total_waste - total_exp # Simplified net
-            st.success(f"### Estimated Net Profit: Rs. {net_profit:,.0f}")
-            st.caption("Note: Profit calculation here is Revenue minus Waste and Expenses.")
+        elif choice == "Add Fruit Stock":
+            with st.form("stock_in"):
+                i = st.text_input("Item Name")
+                q = st.number_input("Qty", min_value=0.0)
+                p = st.number_input("Cost Price", min_value=0.0)
+                if st.form_submit_button("Save Stock"):
+                    self.db.push("purchases", {"item":i,"qty":q,"price":p,"date":self.today,"month":self.month})
 
-        elif menu == "Inventory & Expenses":
-            tab1, tab2 = st.tabs(["Stock In", "Shop Expenses"])
-            with tab1:
-                with st.form("stock_in"):
-                    item = st.text_input("Item Name")
-                    sqty = st.number_input("Qty In", min_value=0.0)
-                    spr = st.number_input("Purchase Price (Rs)", min_value=0.0)
-                    if st.form_submit_button("Add Stock"):
-                        save_entry("purchases", {"item":item, "qty":sqty, "price":spr, "date":today, "month":this_month})
-            with tab2:
-                with st.form("exp_form"):
-                    desc = st.text_input("Expense Description (e.g. Electricity)")
-                    amt = st.number_input("Amount (Rs)", min_value=0.0)
-                    cat = st.selectbox("Category", ["Rent", "Bills", "Staff", "Other"])
-                    if st.form_submit_button("Record Expense"):
-                        save_entry("shop_expenses", {"description":desc, "amount":amt, "category":cat, "date":today, "month":this_month})
+# ==========================================
+# MAIN APP EXECUTION
+# ==========================================
+def main():
+    st.set_page_config(page_title="Islamabad Shop ERP", layout="wide")
+    
+    # Init Core Services
+    db = ShopDB()
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    month_str = now.strftime("%Y-%m")
 
-        elif menu == "Daily Cash":
-            # (Daily Cash logic as before)
-            st.write("Today's cash reconciliation...")
+    # Sidebar Login
+    st.sidebar.title("🏪 Navigation")
+    menu = st.sidebar.selectbox("Go To", ["🍎 Fruit Store", "🔥 Gas Agency", "👑 Admin"])
+    pwd = st.sidebar.text_input("Password", type="password")
 
-        elif menu == "Credit Ledger":
-            # (Credit Ledger logic as before)
-            st.write("Customer debt management...")
+    if not (pwd == "staff123" or pwd == "owner786"):
+        st.info("Enter password to begin.")
+        return
 
-    else: st.error("Admin Only")
+    # Routing Logic
+    if menu == "🍎 Fruit Store":
+        FruitModule(db, today_str, month_str).render()
+    elif menu == "🔥 Gas Agency":
+        GasModule(db, today_str).render()
+    elif menu == "👑 Admin":
+        if pwd == "owner786":
+            AdminModule(db, today_str, month_str).render()
+        else:
+            st.error("Admin Access Required.")
 
-# --- 5. FRUIT & GAS MENUS (Previous working code remains here) ---
-elif role == "Fruit Store":
-    st.header("🍎 Fruit Sales")
-    # ... (Insert your stable Fruit Sales code here)
-elif role == "Gas Agency":
-    st.header("🔥 Gas Sales")
-    # ... (Insert your stable Gas Sales code here)
+if __name__ == "__main__":
+    main()
