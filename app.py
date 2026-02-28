@@ -76,10 +76,12 @@ if pending > 0:
 # --- 7. MAIN DASHBOARD ---
 st.title(f"🍎 {role} Dashboard")
 
+# UPDATED: Operator can no longer see 'Stock In' or 'Expenses'
 if role == "Admin":
     menu = ["Sales", "Stock In", "Waste Log", "Expenses", "Customer Ledger", "Profit Reports"]
 else:
-    menu = ["Sales", "Stock In", "Waste Log"]
+    menu = ["Sales", "Waste Log"]
+    
 choice = st.selectbox("Action Menu", menu)
 
 # --- 8. FEATURES ---
@@ -94,13 +96,12 @@ if choice == "Sales":
         available_items += sorted(p_df['item'].unique().tolist())
     
     with st.form("sale_form", clear_on_submit=True):
-        # UPDATED: Dropdown instead of Text Input
         item = st.selectbox("Select Fruit/Veg", available_items)
-        qty = st.number_input("Quantity (kg/units)", min_value=0.0, step=0.5)
+        qty = st.number_input("Quantity", min_value=0.0, step=0.5)
         pr = st.number_input("Selling Price", min_value=0.0, step=1.0)
         mode = st.radio("Payment Mode", ["Cash", "Credit"])
         
-        # UPDATED: Smart Customer Logic
+        # Smart Customer Logic
         cust = "N/A"
         if mode == "Credit":
             c_df = get_cloud_data("customers")
@@ -114,7 +115,7 @@ if choice == "Sales":
                 save_entry("sales", {"item":item,"qty":qty,"price":pr,"type":mode,"customer":cust,"date":today,"month":this_month})
 
 elif choice == "Stock In":
-    st.subheader("🚚 Purchase New Inventory")
+    st.subheader("🚚 Wholesale Purchases (Admin Only)")
     with st.form("p_form", clear_on_submit=True):
         p_item = st.text_input("New Item Name (e.g. Apple)")
         p_qty = st.number_input("Qty Purchased", min_value=0.0)
@@ -122,24 +123,37 @@ elif choice == "Stock In":
         if st.form_submit_button("Add to Stock List"):
             save_entry("purchases", {"item":p_item,"qty":p_qty,"price":p_cost,"date":today,"month":this_month})
 
-# (Keep remaining sections: Waste, Expenses, Ledger, Reports the same as previous)
 elif choice == "Waste Log":
+    st.subheader("🗑️ Record Spoilage")
     with st.form("w_form", clear_on_submit=True):
-        w_item = st.text_input("Item Name")
+        p_df = get_cloud_data("purchases")
+        w_items = ["Select Item"]
+        if not p_df.empty: w_items += sorted(p_df['item'].unique().tolist())
+        
+        w_item = st.selectbox("Item Name", w_items)
         w_qty = st.number_input("Qty Spoiled", min_value=0.0)
-        w_cost = st.number_input("Cost per unit", min_value=0.0)
+        w_cost = st.number_input("Original Cost Price (Reference)", min_value=0.0)
         if st.form_submit_button("Record Waste"):
             save_entry("waste", {"item":w_item,"qty":w_qty,"cost_price":w_cost,"date":today,"month":this_month})
 
+elif choice == "Expenses":
+    st.subheader("💸 Shop Expenses (Admin Only)")
+    with st.form("e_form", clear_on_submit=True):
+        cat = st.selectbox("Category", ["Business (Rent/Wages)", "Personal (Drawings)"])
+        amt = st.number_input("Amount", min_value=0.0)
+        note = st.text_input("Description")
+        if st.form_submit_button("Save"):
+            save_entry("expenses", {"category":cat,"amount":amt,"description":note,"date":today,"month":this_month})
+
 elif choice == "Customer Ledger":
-    t1, t2 = st.tabs(["Add Customer", "90-Day Statement"])
+    t1, t2 = st.tabs(["Add Customer", "View Balances"])
     with t1:
         new_c = st.text_input("Full Name")
         if st.button("Register"):
             save_entry("customers", {"name": new_c})
     with t2:
-        st.write("View Balance Owed")
-        # Logic for Statement...
+        # Debt calculation logic would go here
+        st.info("Check Supabase dashboard for full balances.")
 
 elif choice == "Profit Reports":
     st.header("📈 Financial Performance")
