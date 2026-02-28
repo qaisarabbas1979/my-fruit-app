@@ -36,7 +36,17 @@ if not ((role == "Admin" and pwd == ADMIN_PW) or (role == "Operator" and pwd == 
 today = datetime.now().strftime("%Y-%m-%d")
 this_month = datetime.now().strftime("%Y-%m")
 
-# --- 4. CORE FUNCTIONS ---
+# --- 4. DATA HELPERS ---
+def get_cloud_data(table):
+    try:
+        res = supabase.table(table).select("*").execute()
+        df = pd.DataFrame(res.data)
+        if not df.empty and 'item' in df.columns:
+            df['item'] = df['item'].str.strip()
+        return df
+    except:
+        return pd.DataFrame()
+
 def save_entry(table, data):
     data_str = json.dumps(data)
     local_c.execute("INSERT INTO sync_queue (table_name, data_json, timestamp) VALUES (?,?,?)", 
@@ -49,16 +59,6 @@ def save_entry(table, data):
         st.success("✅ Saved & Synced!")
     except:
         st.warning("⚠️ Saved Locally (Offline).")
-
-def get_cloud_data(table):
-    try:
-        res = supabase.table(table).select("*").execute()
-        df = pd.DataFrame(res.data)
-        if not df.empty and 'item' in df.columns:
-            df['item'] = df['item'].str.strip()
-        return df
-    except:
-        return pd.DataFrame()
 
 # --- 5. SYNC MANAGER ---
 pending = local_c.execute("SELECT COUNT(*) FROM sync_queue").fetchone()[0]
@@ -75,16 +75,43 @@ if pending > 0:
             except: break
         st.rerun()
 
-# --- 6. NAVIGATION ---
-st.title(f"🍎 {role} Dashboard")
-
+# --- 6. ADMIN CASH SUMMARY (HEADER) ---
 if role == "Admin":
-    menu = ["Sales", "Stock In", "Stock Adjustment", "Waste Log", "Expenses", "Customer Ledger", "Supplier Billing", "Profit Reports"]
+    st.markdown("### 💰 Today's Cash Position")
+    s_all = get_cloud_data("sales")
+    e_all = get_cloud_data("expenses")
+    c_all = get_cloud_data("collections")
+    
+    cash_sales = 0.0
+    expenses = 0.0
+    debt_collected = 0.0
+    
+    if not s_all.empty:
+        day_s = s_all[s_all['date'] == today]
+        cash_sales = (day_s[day_s['type'] == 'Cash']['qty'].astype(float) * day_s[day_s['type'] == 'Cash']['price'].astype(float)).sum()
+    
+    if not e_all.empty:
+        expenses = e_all[e_all['date'] == today]['amount'].sum()
+        
+    if not c_all.empty:
+        debt_collected = c_all[c_all['date_paid'] == today]['amount'].sum()
+        
+    net_cash = cash_sales + debt_collected - expenses
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Cash Sales", f"${cash_sales:,.2f}")
+    col2.metric("Expenses Paid", f"-${expenses:,.2f}", delta_color="inverse")
+    col3.metric("Net Cash in Drawer", f"${net_cash:,.2f}")
+    st.divider()
+
+# --- 7. NAVIGATION ---
+if role == "Admin":
+    menu = ["Sales", "Stock In", "Waste Log", "Stock Adjustment", "Expenses", "Customer Ledger", "Supplier Billing", "Profit Reports"]
 else:
-    menu = ["Sales", "Waste Log"]
+    menu = ["Sales"]
 choice = st.selectbox("Action Menu", menu)
 
-# --- 7. FEATURES ---
+# --- 8. FEATURES ---
 
 if choice == "Sales":
     st.subheader("🛒 Quick Sale")
@@ -99,37 +126,28 @@ if choice == "Sales":
     
     selected_item = st.selectbox("Select Fruit/Veg", available_items)
     
-    # --- CALCULATION WITH ADJUSTMENTS ---
     current_stock = 0.0
     if selected_item != "Select Item":
-        # 1. Start with the most recent manual adjustment if it exists
         if not a_df.empty and selected_item in a_df['item'].values:
             last_adj = a_df[a_df['item'] == selected_item].sort_values(by='id', ascending=False).iloc[0]
             base_qty = float(last_adj['new_quantity'])
             adj_date = last_adj['date']
-            
-            # Only subtract sales/waste that happened AFTER the adjustment date
             sold = s_df[(s_df['item'] == selected_item) & (s_df['date'] >= adj_date)]['qty'].sum() if not s_df.empty else 0
             wasted = w_df[(w_df['item'] == selected_item) & (w_df['date'] >= adj_date)]['qty'].sum() if not w_df.empty else 0
             purchased = p_df[(p_df['item'] == selected_item) & (p_df['date'] > adj_date)]['qty'].sum() if not p_df.empty else 0
             current_stock = base_qty + purchased - sold - wasted
         else:
-            # 2. Standard calculation if no manual adjustment exists
             p_sum = p_df[p_df['item'] == selected_item]['qty'].sum() if not p_df.empty else 0
             s_sum = s_df[s_df['item'] == selected_item]['qty'].sum() if not s_df.empty else 0
             w_sum = w_df[w_df['item'] == selected_item]['qty'].sum() if not w_df.empty else 0
             current_stock = float(p_sum) - float(s_sum) - float(w_sum)
         
-        # UI Alerts
-        if current_stock <= 0: st.error(f"❌ OUT OF STOCK | {current_stock} kg")
-        elif current_stock < 10: st.warning(f"⚠️ LOW STOCK | {current_stock} kg")
-        else: st.info(f"✅ IN STOCK | {current_stock} kg")
+        st.info(f"📦 Stock Level: **{current_stock} kg**")
 
     with st.form("sale_form", clear_on_submit=True):
         qty_to_sell = st.number_input("Quantity", min_value=0.0, step=0.5)
         price_per = st.number_input("Selling Price", min_value=0.0, step=1.0)
         mode = st.radio("Payment", ["Cash", "Credit"])
-        
         cust = "N/A"
         if mode == "Credit":
             c_df = get_cloud_data("customers")
@@ -141,16 +159,31 @@ if choice == "Sales":
                 save_entry("sales", {"item":selected_item,"qty":qty_to_sell,"price":price_per,"type":mode,"customer":cust,"date":today,"month":this_month})
                 st.rerun()
 
-elif choice == "Stock Adjustment":
-    st.subheader("🔧 Manual Inventory Override")
-    st.write("Use this to correct the stock count to match what is physically in the shop.")
+elif choice == "Waste Log":
+    st.subheader("🗑️ Record Spoilage")
     p_df = get_cloud_data("purchases")
-    if not p_df.empty:
-        with st.form("adj_form", clear_on_submit=True):
-            adj_item = st.selectbox("Item to Adjust", sorted(p_df['item'].unique().tolist()))
-            new_val = st.number_input("Actual Physical Quantity in Shop", min_value=0.0)
-            reason = st.text_input("Reason (e.g., Weight loss, Manual Count)")
-            if st.form_submit_button("Force Update Stock"):
-                save_entry("stock_adjustments", {"item":adj_item, "new_quantity":new_val, "reason":reason, "date":today})
+    if p_df.empty:
+        st.warning("Add stock first.")
+    else:
+        with st.form("waste_form", clear_on_submit=True):
+            w_item = st.selectbox("Item Spoiled", sorted(p_df['item'].unique().tolist()))
+            w_qty = st.number_input("Qty Lost", min_value=0.0)
+            w_cost = st.number_input("Original Cost", min_value=0.0)
+            if st.form_submit_button("Log Waste"):
+                save_entry("waste", {"item":w_item,"qty":w_qty,"cost_price":w_cost,"date":today,"month":this_month})
 
-# --- ALL OTHER ADMIN FEATURES (STOCK IN, BILLING, ETC.) REMAIN THE SAME ---
+elif choice == "Expenses":
+    st.subheader("💸 Record Shop Expenses")
+    with st.form("exp_form", clear_on_submit=True):
+        amt = st.number_input("Amount Paid Out", min_value=0.0)
+        desc = st.text_input("Reason (e.g. Electricity, Tea, Bags)")
+        if st.form_submit_button("Save Expense"):
+            save_entry("expenses", {"amount":amt, "description":desc, "date":today, "month":this_month})
+
+elif choice == "Customer Ledger":
+    t1, t2 = st.tabs(["Add Customer", "Collect Debt Payment"])
+    with t1:
+        new_c = st.text_input("Name")
+        if st.button("Register"): save_entry("customers", {"name":new_c})
+    with t2:
+        c_df = get_cloud_
