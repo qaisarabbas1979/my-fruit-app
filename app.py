@@ -24,7 +24,7 @@ class ShopDB:
     def push(self, table, data):
         try:
             self.client.table(table).insert(data).execute()
-            st.success("✅ Recorded Successfully!")
+            st.success("✅ Recorded!")
             return True
         except Exception as e:
             st.error(f"❌ Error: {e}")
@@ -57,7 +57,6 @@ class CustomerModule:
                 st.subheader("Outstanding Balances")
                 f_sales, g_sales, coll = self.db.fetch("sales"), self.db.fetch("gas_sales"), self.db.fetch("collections")
 
-                # Debt Math
                 f_d = f_sales[f_sales['type']=='Credit'].groupby('customer').apply(lambda x: (x['qty'].astype(float)*x['price'].astype(float)).sum()).reset_index(name='f_debt') if not f_sales.empty else pd.DataFrame(columns=['customer','f_debt'])
                 g_d = g_sales[g_sales['payment_mode']=='Credit'].groupby('customer_name')['price_pkr'].sum().reset_index(name='g_debt') if not g_sales.empty else pd.DataFrame(columns=['customer_name','g_debt'])
                 paid = coll.groupby('customer_name')['amount_paid'].sum().reset_index(name='p_amt') if not coll.empty else pd.DataFrame(columns=['customer_name','p_amt'])
@@ -67,7 +66,6 @@ class CustomerModule:
                     res = pd.merge(res, g_d, left_on='name', right_on='customer_name', how='left')
                     res = pd.merge(res, paid, left_on='name', right_on='customer_name', how='left').fillna(0)
                     res['Balance'] = res['f_debt'] + res['g_debt'] - res['p_amt']
-                    
                     debtors = res[res['Balance'] > 0]
                     st.dataframe(debtors[['name', 'Balance']], use_container_width=True)
 
@@ -117,9 +115,9 @@ class FruitModule:
         if self.role == "Admin":
             with tabs[1]:
                 with st.form("stk_in"):
-                    i, q, p = st.text_input("Item"), st.number_input("Qty In"), st.number_input("Cost")
+                    i, q, pr = st.text_input("Item"), st.number_input("Qty In"), st.number_input("Cost")
                     if st.form_submit_button("Add Stock"):
-                        self.db.push("purchases", {"item":i, "qty":q, "price":p, "date":self.today, "month":self.month})
+                        self.db.push("purchases", {"item":i, "qty":q, "price":pr, "date":self.today, "month":self.month})
             with tabs[2]:
                 with st.form("w_log"):
                     wi, wq = st.selectbox("Item Spoiled", items), st.number_input("Qty Lost")
@@ -145,28 +143,4 @@ class GasModule:
                 c_name = st.selectbox("Customer", c_df['name'].tolist() if not c_df.empty else ["Register First"])
                 sz = st.selectbox("Cylinder", ["11.8kg", "45kg", "6kg"])
                 pr, mode = st.number_input("Price"), st.radio("Payment", ["Cash", "Credit"], horizontal=True)
-                swp = st.checkbox("Empty Received?")
-                if st.form_submit_button("Log Transaction"):
-                    self.db.push("gas_sales", {"customer_name":c_name, "cylinder_type":sz, "price_pkr":pr, "payment_mode":mode, "empty_received":swp, "date":self.today, "month":self.month})
-
-        if self.role == "Admin":
-            with tabs[1]:
-                with st.form("sup"):
-                    sn, ret, pay = st.text_input("Supplier"), st.number_input("Empties"), st.number_input("Cash Paid")
-                    if st.form_submit_button("Save"):
-                        self.db.push("gas_supplier_ledger", {"supplier_name":sn, "bottles_returned":ret, "payment_made":pay, "date":self.today})
-
-# ==========================================
-# 5. MAIN ROUTER
-# ==========================================
-def main():
-    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-    if 'biz' not in st.session_state: st.session_state.biz = None
-
-    db = ShopDB()
-    today, month = datetime.now().strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m")
-
-    if not st.session_state.logged_in:
-        st.title("🔐 Shop Login")
-        pwd = st.text_input("Password", type="password")
-        if st.button
+                swp
