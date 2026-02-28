@@ -75,9 +75,9 @@ if pending > 0:
             except: break
         st.rerun()
 
-# --- 6. ADMIN CASH SUMMARY (HEADER) ---
+# --- 6. ADMIN CASH SUMMARY (PKR) ---
 if role == "Admin":
-    st.markdown("### 💰 Today's Cash Position")
+    st.markdown("### 💰 Today's Cash Position (PKR)")
     s_all = get_cloud_data("sales")
     e_all = get_cloud_data("expenses")
     c_all = get_cloud_data("collections")
@@ -99,9 +99,9 @@ if role == "Admin":
     net_cash = cash_sales + debt_collected - expenses
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Cash Sales", f"${cash_sales:,.2f}")
-    col2.metric("Expenses Paid", f"-${expenses:,.2f}", delta_color="inverse")
-    col3.metric("Net Cash in Drawer", f"${net_cash:,.2f}")
+    col1.metric("Cash Sales", f"Rs. {cash_sales:,.0f}")
+    col2.metric("Expenses Paid", f"-Rs. {expenses:,.0f}", delta_color="inverse")
+    col3.metric("Net Cash in Drawer", f"Rs. {net_cash:,.0f}")
     st.divider()
 
 # --- 7. NAVIGATION ---
@@ -146,7 +146,7 @@ if choice == "Sales":
 
     with st.form("sale_form", clear_on_submit=True):
         qty_to_sell = st.number_input("Quantity", min_value=0.0, step=0.5)
-        price_per = st.number_input("Selling Price", min_value=0.0, step=1.0)
+        price_per = st.number_input("Selling Price (PKR)", min_value=0.0, step=10.0)
         mode = st.radio("Payment", ["Cash", "Credit"])
         cust = "N/A"
         if mode == "Credit":
@@ -162,28 +162,39 @@ if choice == "Sales":
 elif choice == "Waste Log":
     st.subheader("🗑️ Record Spoilage")
     p_df = get_cloud_data("purchases")
+    
     if p_df.empty:
-        st.warning("Add stock first.")
+        st.warning("No purchase records found. Add stock first to log waste.")
     else:
+        # Auto-calculate cost based on latest purchase
+        w_item_list = sorted(p_df['item'].unique().tolist())
+        selected_w_item = st.selectbox("Item Spoiled", w_item_list)
+        
+        # Get the latest purchase price for this item
+        latest_price = p_df[p_df['item'] == selected_w_item].sort_values(by='id', ascending=False).iloc[0]['price']
+        st.write(f"ℹ️ Current Purchase Price: **Rs. {latest_price}**")
+
         with st.form("waste_form", clear_on_submit=True):
-            w_item = st.selectbox("Item Spoiled", sorted(p_df['item'].unique().tolist()))
-            w_qty = st.number_input("Qty Lost", min_value=0.0)
-            w_cost = st.number_input("Original Cost", min_value=0.0)
-            if st.form_submit_button("Log Waste"):
-                save_entry("waste", {"item":w_item,"qty":w_qty,"cost_price":w_cost,"date":today,"month":this_month})
+            w_qty = st.number_input("Quantity Spoiled (kg/unit)", min_value=0.0, step=0.1)
+            # Automatic hidden calculation
+            total_loss = w_qty * float(latest_price)
+            st.info(f"💰 Calculated Loss: **Rs. {total_loss:,.0f}**")
+            
+            if st.form_submit_button("Log Spoilage"):
+                save_entry("waste", {"item":selected_w_item, "qty":w_qty, "cost_price":latest_price, "date":today, "month":this_month})
 
 elif choice == "Expenses":
     st.subheader("💸 Record Shop Expenses")
     with st.form("exp_form", clear_on_submit=True):
-        amt = st.number_input("Amount Paid Out", min_value=0.0)
-        desc = st.text_input("Reason (e.g. Electricity, Tea, Bags)")
+        amt = st.number_input("Amount Paid Out (PKR)", min_value=0.0, step=10.0)
+        desc = st.text_input("Reason (e.g. Rent, Bags, Fuel)")
         if st.form_submit_button("Save Expense"):
             save_entry("expenses", {"amount":amt, "description":desc, "date":today, "month":this_month})
 
-elif choice == "Customer Ledger":
-    t1, t2 = st.tabs(["Add Customer", "Collect Debt Payment"])
-    with t1:
-        new_c = st.text_input("Name")
-        if st.button("Register"): save_entry("customers", {"name":new_c})
-    with t2:
-        c_df = get_cloud_
+elif choice == "Profit Reports":
+    st.header("📈 Financial Report (PKR)")
+    s_df = get_cloud_data("sales")
+    if not s_df.empty:
+        s_df['rev'] = s_df['qty'].astype(float) * s_df['price'].astype(float)
+        st.metric("Total Monthly Revenue", f"Rs. {s_df[s_df['month']==this_month]['rev'].sum():,.0f}")
+        st.bar_chart(s_df.groupby('item')['rev'].sum())
